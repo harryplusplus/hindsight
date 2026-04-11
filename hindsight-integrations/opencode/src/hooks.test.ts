@@ -354,4 +354,51 @@ describe('system transform hook', () => {
 
         expect(output.system.length).toBe(0);
     });
+
+    it('skips recall when model matches skipAgents pattern', async () => {
+        const client = makeClient();
+        const state = makeState();
+        state.recalledSessions.add('sess-1');
+        const output = { system: [] as string[] };
+        const hooks = createHooks(
+            client,
+            'bank',
+            makeConfig({ skipAgents: ['gemini-3-flash-preview'] }),
+            state,
+            makeOpencodeClient(),
+        );
+
+        await hooks['experimental.chat.system.transform'](
+            { sessionID: 'sess-1', model: { id: 'gemini-3-flash-preview' } },
+            output,
+        );
+
+        expect(output.system.length).toBe(0);
+        expect(client.recall).not.toHaveBeenCalled();
+    });
+
+    it('injects recall when model does not match skipAgents', async () => {
+        const client = makeClient();
+        client.recall.mockResolvedValue({
+            results: [{ text: 'Some memory', type: 'world' }],
+        });
+        const state = makeState();
+        state.recalledSessions.add('sess-1');
+        const output = { system: [] as string[] };
+        const hooks = createHooks(
+            client,
+            'bank',
+            makeConfig({ skipAgents: ['gemini-3-flash-preview'] }),
+            state,
+            makeOpencodeClient(),
+        );
+
+        await hooks['experimental.chat.system.transform'](
+            { sessionID: 'sess-1', model: { id: 'glm-5.1' } },
+            output,
+        );
+
+        expect(output.system.length).toBeGreaterThan(0);
+        expect(output.system[0]).toContain('hindsight_memories');
+    });
 });

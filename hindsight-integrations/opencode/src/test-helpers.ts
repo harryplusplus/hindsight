@@ -26,6 +26,8 @@ export function makeConfig(overrides: Partial<HindsightConfig> = {}): HindsightC
         retainMission: null,
         agentName: 'opencode',
         debug: false,
+        debugFile: null,
+        skipAgents: [],
         ...overrides,
     };
 }

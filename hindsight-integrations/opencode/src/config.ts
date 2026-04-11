@@ -46,6 +46,8 @@ export interface HindsightConfig {
 
     // Misc
     debug: boolean;
+    debugFile: string | null;
+    skipAgents: string[];
 }
 
 const DEFAULTS: HindsightConfig = {
@@ -85,6 +87,8 @@ const DEFAULTS: HindsightConfig = {
 
     // Misc
     debug: false,
+    debugFile: null,
+    skipAgents: [],
 };
 
 /** Env var → config key + type mapping */
@@ -103,13 +107,19 @@ const ENV_OVERRIDES: Record<string, [keyof HindsightConfig, 'string' | 'bool' | 
     HINDSIGHT_DYNAMIC_BANK_ID: ['dynamicBankId', 'bool'],
     HINDSIGHT_BANK_MISSION: ['bankMission', 'string'],
     HINDSIGHT_DEBUG: ['debug', 'bool'],
+    HINDSIGHT_DEBUG_FILE: ['debugFile', 'string'],
+    HINDSIGHT_SKIP_AGENTS: ['skipAgents', 'string'],
 };
 
-function castEnv(value: string, typ: 'string' | 'bool' | 'int'): string | boolean | number | null {
+function castEnv(value: string, typ: 'string' | 'bool' | 'int'): string | boolean | number | string[] | null {
     if (typ === 'bool') return ['true', '1', 'yes'].includes(value.toLowerCase());
     if (typ === 'int') {
         const n = parseInt(value, 10);
         return isNaN(n) ? null : n;
+    }
+    // 'string' type: for array-typed config keys, parse comma-separated
+    if (typ === 'string' && value.includes(',')) {
+        return value.split(',').map((s) => s.trim()).filter(Boolean);
     }
     return value;
 }
@@ -183,5 +193,33 @@ export function loadConfig(pluginOptions?: Record<string, unknown>): HindsightCo
 export function debugLog(config: HindsightConfig, ...args: unknown[]): void {
     if (config.debug) {
         console.error('[Hindsight]', ...args);
+    }
+    fileLog(config, args);
+}
+
+const fileLogStream = { current: null as ReturnType<typeof createWriteStreamSafe> | null };
+
+function createWriteStreamSafe(path: string) {
+    try {
+        const { createWriteStream } = require('node:fs');
+        return createWriteStream(path, { flags: 'a' });
+    } catch {
+        return null;
+    }
+}
+
+function fileLog(config: HindsightConfig, args: unknown[]): void {
+    if (!config.debugFile) return;
+    if (!fileLogStream.current) {
+        fileLogStream.current = createWriteStreamSafe(config.debugFile);
+    }
+    const stream = fileLogStream.current;
+    if (!stream) return;
+    const timestamp = new Date().toISOString();
+    const msg = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    try {
+        stream.write(`${timestamp} [Hindsight] ${msg}\n`);
+    } catch {
+        // ignore write errors
     }
 }

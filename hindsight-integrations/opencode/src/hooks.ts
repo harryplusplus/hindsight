@@ -56,6 +56,16 @@ interface SystemTransformOutput {
     system: string[];
 }
 
+interface MessageTransformInput {
+    sessionID?: string;
+    model: unknown;
+    messages: unknown[];
+}
+
+interface MessageTransformOutput {
+    messages: unknown[];
+}
+
 type OpencodeClient = {
     session: {
         messages: (opts: { path: { id: string } }) => Promise<{ data?: Array<{ role: string; parts?: Array<{ type: string; text?: string }> }> }>;
@@ -90,6 +100,7 @@ export function createHooks(
 
     /** Recall memories and format as context string */
     async function recallForContext(query: string): Promise<RecallOutcome> {
+        debugLog(config, `Recall query: ${query}`);
         try {
             const response = await hindsightClient.recall(bankId, query, {
                 budget: config.recallBudget as 'low' | 'mid' | 'high',
@@ -98,6 +109,7 @@ export function createHooks(
             });
 
             const results = response.results || [];
+            debugLog(config, `Recall returned ${results.length} result(s)`);
             if (!results.length) return { context: null, ok: true };
 
             const formatted = formatMemories(results);
@@ -107,6 +119,7 @@ export function createHooks(
                 `Current time: ${formatCurrentTime()} UTC\n\n` +
                 `${formatted}\n` +
                 `</hindsight_memories>`;
+            debugLog(config, `Recall context length: ${context.length} chars`);
             return { context, ok: true };
         } catch (e) {
             debugLog(config, 'Recall failed:', e);
@@ -272,12 +285,36 @@ export function createHooks(
         output: SystemTransformOutput,
     ): Promise<void> => {
         try {
-            if (!config.autoRecall) return;
+            if (!config.autoRecall) {
+                debugLog(config, 'systemTransform: autoRecall is disabled, skipping');
+                return;
+            }
             const sessionId = input.sessionID;
-            if (!sessionId) return;
+            if (!sessionId) {
+                debugLog(config, 'systemTransform: no sessionID, skipping');
+                return;
+            }
+
+            // Detect agent from model info — title/summary/compaction agents use "small" models
+            const modelInfo = input.model as { id?: string; capabilities?: { temperature?: boolean } } | undefined;
+            const modelId = typeof modelInfo?.id === 'string' ? modelInfo.id : '';
+            debugLog(config, `systemTransform: session=${sessionId}, model=${modelId || 'unknown'}`);
+
+            // Check skipAgents
+            if (config.skipAgents.length > 0) {
+                for (const skipPattern of config.skipAgents) {
+                    if (modelId.toLowerCase().includes(skipPattern.toLowerCase())) {
+                        debugLog(config, `systemTransform: model "${modelId}" matches skipAgents pattern "${skipPattern}", skipping recall injection`);
+                        return;
+                    }
+                }
+            }
 
             // Only inject on first message of a session (tracked by recalledSessions)
-            if (!state.recalledSessions.has(sessionId)) return;
+            if (!state.recalledSessions.has(sessionId)) {
+                debugLog(config, `systemTransform: session ${sessionId} not in recalledSessions, skipping`);
+                return;
+            }
 
             await ensureBankMission(hindsightClient, bankId, config, state.missionsSet);
 
@@ -293,7 +330,9 @@ export function createHooks(
 
             if (context) {
                 output.system.push(context);
-                debugLog(config, `Injected recall context for session ${sessionId}`);
+                debugLog(config, `Injected recall context for session ${sessionId} (${context.length} chars)`);
+            } else {
+                debugLog(config, `No recall context to inject for session ${sessionId}`);
             }
         } catch (e) {
             debugLog(config, 'System transform hook error:', e);

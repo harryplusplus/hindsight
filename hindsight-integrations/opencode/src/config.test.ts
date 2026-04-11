@@ -27,6 +27,8 @@ describe('loadConfig', () => {
         expect(config.agentName).toBe('opencode');
         expect(config.dynamicBankId).toBe(false);
         expect(config.debug).toBe(false);
+        expect(config.debugFile).toBeNull();
+        expect(config.skipAgents).toEqual([]);
         expect(config.hindsightApiUrl).toBeNull();
         expect(config.hindsightApiToken).toBeNull();
         expect(config.bankId).toBeNull();
