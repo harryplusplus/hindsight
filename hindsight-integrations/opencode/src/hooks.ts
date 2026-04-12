@@ -120,6 +120,7 @@ export function createHooks(
                 `${formatted}\n` +
                 `</hindsight_memories>`;
             debugLog(config, `Recall context length: ${context.length} chars`);
+            debugLog(config, `Recall context body:\n${context}`);
             return { context, ok: true };
         } catch (e) {
             debugLog(config, 'Recall failed:', e);
@@ -133,12 +134,15 @@ export function createHooks(
             const response = await opencodeClient.session.messages({
                 path: { id: sessionId },
             });
+            debugLog(config, `getSessionMessages response: keys=${Object.keys(response).join(',')}, dataType=${typeof response.data}, dataIsArray=${Array.isArray(response.data)}`);
             const rawMessages = response.data || [];
+            debugLog(config, `getSessionMessages: rawMessages count=${rawMessages.length}`);
             const messages: Message[] = [];
             for (const msg of rawMessages) {
-                const role = msg.role;
+                const role = msg.role ?? (msg as { info?: { role?: string } }).info?.role;
                 if (role !== 'user' && role !== 'assistant') continue;
-                const textParts = (msg.parts || [])
+                const parts = msg.parts ?? (msg as { info?: { parts?: unknown[] } }).info?.parts ?? [];
+                const textParts = (parts as Array<{ type: string; text?: string }>)
                     .filter((p: { type: string; text?: string }) => p.type === 'text' && p.text)
                     .map((p: { type: string; text?: string }) => p.text!);
                 if (textParts.length) {
@@ -176,6 +180,9 @@ export function createHooks(
         const { transcript } = prepareRetentionTranscript(targetMessages, true);
         if (!transcript) return;
 
+        debugLog(config, `Retaining session ${sessionId} (mode=${config.retainMode}, msgs=${targetMessages.length}, docId=${documentId})`);
+        debugLog(config, `Retain transcript:\n${transcript}`);
+
         await ensureBankMission(hindsightClient, bankId, config, state.missionsSet);
         await hindsightClient.retain(bankId, transcript, {
             documentId,
@@ -190,17 +197,23 @@ export function createHooks(
 
     /** Auto-retain conversation transcript */
     async function handleSessionIdle(sessionId: string): Promise<void> {
+        debugLog(config, `handleSessionIdle called: sessionId=${sessionId}, autoRetain=${config.autoRetain}`);
         if (!config.autoRetain) return;
 
         const messages = await getSessionMessages(sessionId);
+        debugLog(config, `handleSessionIdle: got ${messages.length} messages for session ${sessionId}`);
         if (!messages.length) return;
 
         // Count user turns
         const userTurns = messages.filter((m) => m.role === 'user').length;
         const lastRetained = state.lastRetainedTurn.get(sessionId) || 0;
+        debugLog(config, `handleSessionIdle: userTurns=${userTurns}, lastRetained=${lastRetained}, retainEveryNTurns=${config.retainEveryNTurns}`);
 
         // Only retain if enough new turns since last retain
-        if (userTurns - lastRetained < config.retainEveryNTurns) return;
+        if (userTurns - lastRetained < config.retainEveryNTurns) {
+            debugLog(config, `handleSessionIdle: skipping retain, not enough new turns (need ${config.retainEveryNTurns}, have ${userTurns - lastRetained})`);
+            return;
+        }
 
         try {
             await retainSession(sessionId, messages);
@@ -214,6 +227,7 @@ export function createHooks(
     const event = async (input: EventInput): Promise<void> => {
         try {
             const { event: evt } = input;
+            debugLog(config, `Event received: type=${evt.type}`);
 
             if (evt.type === 'session.idle') {
                 const sessionId = (evt.properties as { sessionID?: string }).sessionID;
